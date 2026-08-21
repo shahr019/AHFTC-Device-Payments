@@ -19,6 +19,12 @@ These files, in combination with freely and publicly available Open Payments and
     the analyses can do so without rerunning the complete
     data-construction pipeline.
 
+4.  **ahftc_npis_final.xslx** contains the final list of NPIs and their
+    manual review as outlined in the manuscript, including the addition
+    of a small number of NPIs (scientific document authors), removal
+    of a small number of NPIs (e.g., non-physicians, trainees), and 
+    re-classification of a small number of NPIs as dual sub-specialists 
+
 ## Reproducing the Analysis
 
 There are two options for reproducing the study:
