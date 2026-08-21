@@ -1,0 +1,260 @@
+############################################################
+# Figures: Top 20 Devices by Payment Value
+# Open Payments, 2018-2024
+#
+# PURPOSE
+# Classifies the 20 devices with the highest cumulative
+# device-related payment value by cardiovascular guideline
+# status and creates two device-level figures.
+#
+# REQUIRED INPUT
+#   top50_devices
+#     Final ranked device-level dataset generated in the
+#     device analysis. Must include:
+#       - company_clean
+#       - device
+#       - total_value_all_years
+#       - n_transactions_all_years
+#       - cumulative payment-category variables ending in
+#         "_value_total"
+#
+# MANUAL CLASSIFICATION WITHIN THIS SCRIPT
+#   CV_guideline_status
+#     Devices are classified as:
+#       - Supported
+#       - Not Supported
+#       - Off Market
+#       - Unable to Classify
+#
+#   The device groups used for this classification are defined
+#   manually in the vectors:
+#       hf_only_no_guideline
+#       off_market
+#       unable_to_classify
+#
+# OUTPUTS
+#   top20_devices
+#     Top 20 devices ranked by cumulative payment value, with
+#     CV_guideline_status added.
+#
+#   figure_device_total
+#     Bar plot of cumulative payment value for the top 20
+#     devices, colored by guideline status.
+#
+#   figure_device_category
+#     Stacked bar plot of cumulative payment value for the same
+#     devices, stratified by payment category.
+#
+# NOTE
+# Payment value from records listing more than one device was
+# allocated across device names during the upstream device-level
+# dataset construction. This script uses those final aggregated
+# device-level values.
+############################################################
+
+library(data.table)
+library(ggplot2)
+library(scales)
+
+setDT(top50_devices)
+
+############################################################
+# 1. Classify top 20 devices by guideline status
+############################################################
+
+# Devices without Class I or IIa support in the included guidelines
+hf_only_no_guideline <- c(
+  "CARDIOMEMS","OPTIMIZER","BAROSTIM NEO","REDS SYSTEM",
+  "AQUADEX","VNS VITARIA","ACCUCINCH","REMEDE SYSTEM"
+)
+
+# Device permanently removed from market
+off_market <- "HEARTWARE HVAD"
+
+# Product description was not specific enough for classification
+unable_to_classify <- c(
+  "CLINICAL TRIAL PROD.","ORGAN CARE SYS.","ENSITE"
+)
+
+top20_devices <- top50_devices[order(-total_value_all_years)][1:20]
+
+top20_devices[,CV_guideline_status:=fifelse(
+  device %in% off_market,"Off Market",
+  fifelse(
+    device %in% hf_only_no_guideline,"Not Supported",
+    fifelse(device %in% unable_to_classify,"Unable to Classify","Supported")
+  )
+)]
+
+top20_devices[,CV_guideline_status:=factor(
+  CV_guideline_status,
+  levels=c("Supported","Not Supported","Off Market","Unable to Classify")
+)]
+
+setcolorder(
+  top20_devices,
+  c(
+    "company_clean","device","CV_guideline_status",
+    setdiff(names(top20_devices),c("company_clean","device","CV_guideline_status"))
+  )
+)
+
+
+############################################################
+# 2. Total payments by device
+############################################################
+
+dt <- copy(top20_devices)
+
+dt[,device_label:=paste0(device," (",company_clean,")")]
+dt[,total_m:=total_value_all_years/1e6]
+dt[,total_tx:=as.integer(n_transactions_all_years)]
+
+dt[,label_expr:=sprintf(
+  "bold('$%.1fM')~italic('(N = %s)')",
+  total_m,comma(total_tx)
+)]
+
+# Preserve descending payment order after coord_flip()
+device_order <- dt[order(-total_value_all_years),device_label]
+dt[,device_label:=factor(device_label,levels=rev(device_order))]
+
+figure_device_total <- ggplot(
+  dt,
+  aes(x=device_label,y=total_m,fill=CV_guideline_status)
+) +
+  geom_col(width=0.9,color="snow") +
+  geom_text(
+    aes(label=label_expr),
+    hjust=-0.10,size=4,fontface="bold",parse=TRUE
+  ) +
+  coord_flip() +
+  scale_y_continuous(
+    labels=dollar_format(prefix="$",suffix="M",accuracy=1),
+    expand=expansion(mult=c(0,0.16))
+  ) +
+  scale_fill_manual(
+    values=c(
+      "Supported"="green3",
+      "Not Supported"="orange",
+      "Off Market"="black",
+      "Unable to Classify"="gray70"
+    )
+  ) +
+  labs(
+    x=NULL,
+    y="Total Payments (Millions USD)",
+    fill="CV Guideline Status"
+  ) +
+  theme_minimal(base_size=12) +
+  theme(
+    panel.grid.major.y=element_blank(),
+    panel.grid.minor=element_blank(),
+    axis.text.y=element_text(size=9),
+    legend.position="bottom",
+    legend.direction="horizontal",
+    legend.box="horizontal",
+    legend.key.size=grid::unit(0.4,"cm"),
+    legend.text=element_text(size=9),
+    legend.title=element_text(face="bold",size=10)
+  ) +
+  guides(fill=guide_legend(nrow=1,byrow=TRUE))
+
+figure_device_total
+
+
+############################################################
+# 3. Payment category composition by device
+############################################################
+
+dt <- copy(top20_devices)
+dt[,device_label:=paste0(device," (",company_clean,")")]
+
+# Reshape cumulative category payment values to long format
+cat_cols <- grep("_value_total$",names(dt),value=TRUE)
+
+cat_data <- dt[
+  ,c(
+    "device_label","device","company_clean",
+    "total_value_all_years","n_transactions_all_years",cat_cols
+  ),
+  with=FALSE
+]
+
+cat_long <- melt(
+  cat_data,
+  id.vars=c(
+    "device_label","device","company_clean",
+    "total_value_all_years","n_transactions_all_years"
+  ),
+  variable.name="category",
+  value.name="value"
+)
+
+# Clean category labels
+cat_long[,category:=gsub("_value_total$","",category)]
+cat_long[,category:=gsub("\\."," ",category)]
+cat_long[category=="Consulting fees",category:="Consulting Fees"]
+cat_long[category=="Speaking fees",category:="Speaking Fees"]
+cat_long[category=="Food and beverage",category:="Food & Bev"]
+cat_long[category=="Travel and lodging",category:="Travel & Lodging"]
+
+cat_long[,value_m:=value/1e6]
+cat_long[,device_label:=factor(device_label,levels=rev(device_order))]
+
+custom_colors <- c(
+  "Consulting Fees"="#6F1D1D",
+  "Speaking Fees"="#A93226",
+  "Travel & Lodging"="#E74C3C",
+  "Honoraria"="#F1948A",
+  "Food & Bev"="#F6DDCC",
+  "Other"="#E0E0E0"
+)
+
+# Reverse factor levels so stacked order is preserved after coord_flip()
+cat_long[,category:=factor(category,levels=rev(names(custom_colors)))]
+
+# Labels use cumulative payment value and transaction count
+totals <- dt[,.(total_value_m=total_value_all_years/1e6,
+                total_tx=as.integer(n_transactions_all_years)),
+             by=device_label]
+
+totals[,device_label:=factor(device_label,levels=rev(device_order))]
+totals[,label_expr:=sprintf(
+  "bold('$%.1fM')~italic('(N = %s)')",
+  total_value_m,comma(total_tx)
+)]
+
+figure_device_category <- ggplot(
+  cat_long,
+  aes(x=device_label,y=value_m,fill=category)
+) +
+  geom_col(width=0.9,color="snow") +
+  geom_text(
+    data=totals,
+    aes(x=device_label,y=total_value_m,label=label_expr),
+    hjust=-0.10,size=4,fontface="bold",parse=TRUE,
+    inherit.aes=FALSE
+  ) +
+  coord_flip() +
+  scale_y_continuous(
+    labels=dollar_format(prefix="$",suffix="M",accuracy=1),
+    expand=expansion(mult=c(0,0.16))
+  ) +
+  scale_fill_manual(values=custom_colors,guide="none") +
+  labs(
+    title="Top 20 Devices by Payment Value (2018–2024)",
+    subtitle="Stratified by payment category; transaction counts shown in italics",
+    x=NULL,
+    y="Total Payments (Millions USD)"
+  ) +
+  theme_minimal(base_size=12) +
+  theme(
+    panel.grid.major.y=element_blank(),
+    panel.grid.minor=element_blank(),
+    plot.title=element_text(face="bold"),
+    axis.text.y=element_text(size=9),
+    legend.position="none"
+  )
+
+figure_device_category
