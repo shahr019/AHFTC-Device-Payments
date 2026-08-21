@@ -1,0 +1,211 @@
+############################################################
+# Figures: Top 15 Device Manufacturers
+# Open Payments, 2018-2024
+#
+# PURPOSE
+# Creates two manufacturer-level figures using the 15 device
+# manufacturers with the highest cumulative device-related
+# payment value.
+#
+# REQUIRED INPUT
+#   master_company
+#     Final manufacturer-level analytic dataset generated in
+#     the device manufacturer analysis. Must include:
+#       - company_clean
+#       - total_value
+#       - total_tx
+#       - n_phys_over5000_total
+#       - pct_phys_over5000_of_cohort_total
+#       - cumulative payment-category variables beginning with
+#         "cat_total_"
+#
+# OUTPUTS
+#   figure_payment_value
+#     Stacked bar plot of cumulative payment value by payment
+#     category for the top 15 manufacturers.
+#
+#   figure_significant_coi
+#     Bar plot showing the number and percentage of AHFTC
+#     specialists with a significant financial relationship
+#     with each of the same top 15 manufacturers.
+#
+#   pct_top15 - for reference only
+#     Percentage of all unique physician-manufacturer significant
+#     COIs accounted for by the top 15 manufacturers.
+#
+# NOTE
+# Manufacturers in both figures are selected and ordered by
+# cumulative payment value, not by number of significant COIs.
+############################################################
+
+library(data.table)
+library(ggplot2)
+library(scales)
+
+setDT(master_company)
+
+
+############################################################
+# 1. Select top 15 manufacturers
+############################################################
+
+top_15 <- master_company[order(-total_value)][1:min(15,.N)]
+company_order <- top_15$company_clean
+
+
+############################################################
+# 2. Prepare payment-category data
+############################################################
+
+cat_cols <- grep("^cat_total_",names(top_15),value=TRUE)
+
+cat_long <- melt(
+  top_15[,c("company_clean","total_value","total_tx",cat_cols),with=FALSE],
+  id.vars=c("company_clean","total_value","total_tx"),
+  variable.name="category",
+  value.name="value"
+)
+
+# Clean category labels
+cat_long[,category:=sub("^cat_total_","",category)]
+cat_long[,category:=gsub("\\."," ",category)]
+cat_long[,category:=fcase(
+  category=="Consulting fees","Consulting Fees",
+  category=="Speaking fees","Speaking Fees",
+  category=="Travel and lodging","Travel & Lodging",
+  category=="Food and beverage","Food & Bev",
+  default=category
+)]
+
+cat_long[,value_m:=value/1e6]
+cat_long[,company_clean:=factor(company_clean,levels=rev(company_order))]
+
+custom_colors <- c(
+  "Consulting Fees"="#6F1D1D",
+  "Speaking Fees"="#A93226",
+  "Travel & Lodging"="#E74C3C",
+  "Honoraria"="#F1948A",
+  "Food & Bev"="#F6DDCC",
+  "Other"="#E0E0E0"
+)
+
+# Reverse levels so stack order is preserved after coord_flip()
+cat_long[,category:=factor(category,levels=rev(names(custom_colors)))]
+
+
+############################################################
+# 3. Manufacturer totals and figure labels
+############################################################
+
+totals <- top_15[,.(company_clean,
+                    total_value_m=total_value/1e6,
+                    total_tx,
+                    n_significant_coi=n_phys_over5000_total,
+                    pct_cohort_significant_coi=pct_phys_over5000_of_cohort_total)]
+
+totals[,company_clean:=factor(company_clean,levels=rev(company_order))]
+
+totals[,payment_label_expr:=sprintf(
+  "bold('$%.1fM')~italic('(N = %s)')",
+  total_value_m,comma(total_tx)
+)]
+
+totals[,coi_label:=paste0(
+  n_significant_coi," (",sprintf("%.1f",pct_cohort_significant_coi),"%)"
+)]
+
+
+############################################################
+# 4. Figure 1: Payment value by category
+############################################################
+
+figure_payment_value <- ggplot(
+  cat_long,
+  aes(x=company_clean,y=value_m,fill=category)
+) +
+  geom_col(width=0.9,color="snow") +
+  geom_text(
+    data=totals,
+    aes(x=company_clean,y=total_value_m,label=payment_label_expr),
+    hjust=-0.10,size=4,fontface="bold",parse=TRUE,
+    inherit.aes=FALSE
+  ) +
+  coord_flip() +
+  scale_y_continuous(
+    labels=dollar_format(prefix="$",suffix="M",accuracy=0.1),
+    expand=expansion(mult=c(0,0.18))
+  ) +
+  scale_fill_manual(values=custom_colors,guide="none") +
+  labs(
+    title="Top 15 Device Companies by Payment Value, 2018–2024",
+    subtitle="Payments stratified by category; labels show total value and number of transactions",
+    x=NULL,
+    y="Total payments, millions USD",
+    caption="Companies are ranked by total payment value."
+  ) +
+  theme_minimal(base_size=12) +
+  theme(
+    panel.grid.major.y=element_blank(),
+    panel.grid.minor=element_blank(),
+    plot.title=element_text(face="bold"),
+    axis.text.y=element_text(size=9),
+    legend.position="none",
+    plot.caption=element_text(hjust=0)
+  )
+
+figure_payment_value
+
+
+############################################################
+# 5. Figure 2: Significant COI by manufacturer
+############################################################
+
+figure_significant_coi <- ggplot(
+  totals,
+  aes(x=company_clean,y=n_significant_coi)
+) +
+  geom_col(width=0.72) +
+  geom_text(
+    aes(label=coi_label),
+    hjust=-0.10,size=4
+  ) +
+  coord_flip() +
+  scale_y_continuous(
+    breaks=pretty_breaks(),
+    expand=expansion(mult=c(0,0.20))
+  ) +
+  labs(
+    title="Significant Device COI Among the Top 15 Companies by Payment Value",
+    subtitle="Unique AHFTC specialists receiving ≥$5,000 from each company in at least one calendar year, 2018–2024",
+    x=NULL,
+    y="Number of specialists",
+    caption=paste0(
+      "Labels show n (% of the 1,271-specialist cohort). Companies are selected and ordered ",
+      "by total payment value, not by COI count. Repeated qualifying years with the same ",
+      "company are counted once."
+    )
+  ) +
+  theme_minimal(base_size=12) +
+  theme(
+    panel.grid.major.y=element_blank(),
+    panel.grid.minor=element_blank(),
+    plot.title=element_text(face="bold"),
+    axis.text.y=element_text(size=9),
+    plot.caption=element_text(hjust=0)
+  )
+
+figure_significant_coi
+
+
+############################################################
+# 6. Share of all significant physician-manufacturer COIs
+#    accounted for by the top 15 manufacturers
+############################################################
+
+top15_coi <- sum(top_15$n_phys_over5000_total,na.rm=TRUE)
+all_coi <- sum(master_company$n_phys_over5000_total,na.rm=TRUE)
+pct_top15 <- 100*top15_coi/all_coi
+
+cat("\nTop 15 physician-manufacturer COIs:",top15_coi,"\n")
+cat("All physician-manufacturer COIs:",all_coi,"\n")
+cat(sprintf("Top 15 account for %.1f%% of all physician-manufacturer COIs.\n",pct_top15))
