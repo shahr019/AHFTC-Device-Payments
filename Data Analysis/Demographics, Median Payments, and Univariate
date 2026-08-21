@@ -1,0 +1,328 @@
+############################################################
+# Demographics, Median Device Payments, and Univariate Associations 
+# With Device-Related COI
+#
+# Outcomes:
+#   1. Any significant device COI
+#   2. Significant COI with multiple device manufacturers
+#
+# Also reports:
+#   - N (%) of sample
+#   - Median cumulative device payment value (IQR)
+#   - Median cumulative number of device payments (IQR)
+#
+# Predictors:
+#   Gender, region, career stage, dual specialty status,
+#   academic status, and guideline/scientific document authorship
+#
+# INPUT
+#   ahftc_summary_nature
+#
+# OUTPUT
+#   table_univariate_device_coi
+############################################################
+
+library(data.table)
+
+setDT(ahftc_summary_nature)
+
+years <- 2018:2024
+total_N <- nrow(ahftc_summary_nature)
+
+
+############################################################
+# 1. Create analysis variables
+############################################################
+
+# Career stage based on median years since NPI enumeration
+median_years <- median(
+  ahftc_summary_nature$years_since_npi,
+  na.rm=TRUE
+)
+
+ahftc_summary_nature[,career_stage:=ifelse(
+  years_since_npi<median_years,
+  "Early–Mid Career",
+  "Mid–Late Career"
+)]
+
+ahftc_summary_nature[,career_stage:=factor(
+  career_stage,
+  levels=c("Early–Mid Career","Mid–Late Career")
+)]
+
+# Dual specialty status
+ahftc_summary_nature[,dual_specialty_group:=ifelse(
+  dual_specialty==0,
+  "AHFTC Only",
+  "Dual Specialty (AHFTC + Other)"
+)]
+
+ahftc_summary_nature[,dual_specialty_group:=factor(
+  dual_specialty_group,
+  levels=c("AHFTC Only","Dual Specialty (AHFTC + Other)")
+)]
+
+# Keep factor order consistent with manuscript tables
+ahftc_summary_nature[,academic_status:=factor(
+  academic_status,
+  levels=c("No","Yes")
+)]
+
+ahftc_summary_nature[,guideline_author:=factor(
+  guideline_author,
+  levels=c("No","Yes")
+)]
+
+# Cumulative device payments and transactions
+pay_cols <- paste0("yr",years,"_device_payments_combined")
+tx_cols <- paste0("yr",years,"_n_device_tx_combined")
+
+ahftc_summary_nature[,device_pay_cum:=
+                       rowSums(.SD,na.rm=TRUE),
+                     .SDcols=pay_cols]
+
+ahftc_summary_nature[,device_tx_cum:=
+                       rowSums(.SD,na.rm=TRUE),
+                     .SDcols=tx_cols]
+
+cat("Median years since NPI =",median_years,"\n")
+
+
+############################################################
+# 2. Helper functions
+############################################################
+
+format_p <- function(p) {
+  if (is.na(p)) ""
+  else if (p<0.001) "<0.001"
+  else sprintf("%.3f",p)
+}
+
+calculate_p <- function(dt,group_var,outcome_var) {
+  x <- dt[!is.na(get(group_var)) & !is.na(get(outcome_var))]
+  tab <- table(x[[group_var]],x[[outcome_var]])
+  if (nrow(tab)<2 || ncol(tab)<2) return(NA_real_)
+  chisq.test(tab)$p.value
+}
+
+format_n_pct <- function(n,denom) {
+  paste0(
+    format(n,big.mark=","),
+    " (",
+    sprintf("%.1f",100*n/denom),
+    "%)"
+  )
+}
+
+format_money <- function(x) {
+  format(
+    round(x),
+    big.mark=",",
+    scientific=FALSE,
+    trim=TRUE
+  )
+}
+
+format_count <- function(x) {
+  format(
+    round(x),
+    big.mark=",",
+    scientific=FALSE,
+    trim=TRUE
+  )
+}
+
+median_iqr <- function(x,money=FALSE) {
+  q <- quantile(x,c(.25,.50,.75),na.rm=TRUE,names=FALSE)
+  f <- if (money) format_money else format_count
+  paste0(f(q[2])," (",f(q[1]),"–",f(q[3]),")")
+}
+
+
+############################################################
+# 3. Summarize one subgroup
+############################################################
+
+summarize_device_coi <- function(
+    varname,
+    varlabel,
+    exclude_other_region=FALSE
+) {
+  
+  dt <- copy(ahftc_summary_nature)
+  
+  # Region analysis excludes physicians outside the four Census regions
+  if (exclude_other_region && varname=="region")
+    dt <- dt[region!="Other" & !is.na(region)]
+  
+  dt <- dt[!is.na(get(varname))]
+  
+  tab <- dt[
+    ,
+    .(
+      N=.N,
+      median_payment=median_iqr(device_pay_cum,money=TRUE),
+      median_transactions=median_iqr(device_tx_cum),
+      n_any_device=sum(sig_device_coi_ever_new==1,na.rm=TRUE),
+      n_multiple_device=sum(multiple_device_company_coi==1,na.rm=TRUE)
+    ),
+    by=get(varname)
+  ]
+  
+  setnames(tab,"get","Level")
+  
+  # Preserve predefined factor order
+  if (is.factor(dt[[varname]])) {
+    tab[,Level:=factor(Level,levels=levels(dt[[varname]]))]
+    setorder(tab,Level)
+    tab[,Level:=as.character(Level)]
+  } else {
+    setorder(tab,Level)
+  }
+  
+  tab[,`N (%) of Sample`:=vapply(
+    N,
+    function(n) format_n_pct(n,total_N),
+    character(1)
+  )]
+  
+  tab[,`Any Device COI n/N (%)`:=paste0(
+    n_any_device,"/",N,
+    " (",round(100*n_any_device/N,1),"%)"
+  )]
+  
+  tab[,`Multiple-Company Device COI n/N (%)`:=paste0(
+    n_multiple_device,"/",N,
+    " (",round(100*n_multiple_device/N,1),"%)"
+  )]
+  
+  header <- data.table(
+    Variable=varlabel,
+    Level="",
+    `N (%) of Sample`="",
+    `Median Device Payment Value (IQR), $`="",
+    `Median No. of Device Payments (IQR)`="",
+    `Any Device COI n/N (%)`="",
+    `P value (Any Device)`=
+      format_p(calculate_p(dt,varname,"sig_device_coi_ever_new")),
+    `Multiple-Company Device COI n/N (%)`="",
+    `P value (Multiple Company)`=
+      format_p(calculate_p(dt,varname,"multiple_device_company_coi"))
+  )
+  
+  level_rows <- data.table(
+    Variable="",
+    Level=tab$Level,
+    `N (%) of Sample`=tab$`N (%) of Sample`,
+    `Median Device Payment Value (IQR), $`=tab$median_payment,
+    `Median No. of Device Payments (IQR)`=tab$median_transactions,
+    `Any Device COI n/N (%)`=tab$`Any Device COI n/N (%)`,
+    `P value (Any Device)`="",
+    `Multiple-Company Device COI n/N (%)`=
+      tab$`Multiple-Company Device COI n/N (%)`,
+    `P value (Multiple Company)`=""
+  )
+  
+  rbind(header,level_rows)
+}
+
+
+############################################################
+# 4. Run univariate analyses
+############################################################
+
+table_univariate_device_coi <- rbindlist(list(
+  
+  summarize_device_coi(
+    "gender",
+    "Gender"
+  ),
+  
+  summarize_device_coi(
+    "region",
+    "Region",
+    exclude_other_region=TRUE
+  ),
+  
+  summarize_device_coi(
+    "career_stage",
+    paste0(
+      "Career Stage (Median Years Since NPI = ",
+      median_years,
+      ")"
+    )
+  ),
+  
+  summarize_device_coi(
+    "dual_specialty_group",
+    "Dual Specialty Status"
+  ),
+  
+  summarize_device_coi(
+    "academic_status",
+    "Academic Status"
+  ),
+  
+  summarize_device_coi(
+    "guideline_author",
+    "Guideline Authorship"
+  )
+  
+),fill=TRUE)
+
+
+############################################################
+# 5. Add overall totals
+############################################################
+
+total_any <- sum(
+  ahftc_summary_nature$sig_device_coi_ever_new==1,
+  na.rm=TRUE
+)
+
+total_multiple <- sum(
+  ahftc_summary_nature$multiple_device_company_coi==1,
+  na.rm=TRUE
+)
+
+total_row <- data.table(
+  Variable="Total",
+  Level="",
+  `N (%) of Sample`=format_n_pct(total_N,total_N),
+  `Median Device Payment Value (IQR), $`=
+    median_iqr(ahftc_summary_nature$device_pay_cum,money=TRUE),
+  `Median No. of Device Payments (IQR)`=
+    median_iqr(ahftc_summary_nature$device_tx_cum),
+  `Any Device COI n/N (%)`=paste0(
+    total_any,"/",total_N,
+    " (",round(100*total_any/total_N,1),"%)"
+  ),
+  `P value (Any Device)`="",
+  `Multiple-Company Device COI n/N (%)`=paste0(
+    total_multiple,"/",total_N,
+    " (",round(100*total_multiple/total_N,1),"%)"
+  ),
+  `P value (Multiple Company)`=""
+)
+
+table_univariate_device_coi <- rbind(
+  table_univariate_device_coi,
+  total_row,
+  fill=TRUE
+)
+
+
+############################################################
+# 6. Check results
+############################################################
+
+stopifnot(
+  total_N==1271,
+  total_any==265,
+  total_multiple==96
+)
+
+table_univariate_device_coi
+
+View(table_univariate_device_coi)
