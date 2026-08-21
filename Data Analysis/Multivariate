@@ -1,0 +1,289 @@
+############################################################
+# Multivariable Logistic Regression for Device-Related COI
+#
+# Outcomes:
+#   1. Any significant device COI
+#   2. Significant COI with multiple device manufacturers
+#
+# Covariates:
+#   Gender, region, career stage, dual specialty status,
+#   academic status, and guideline/scientific document authorship
+#
+# Reference groups:
+#   Female, Midwest, Early–Mid Career, AHFTC Only,
+#   Nonacademic, Not Guideline Author
+#
+# INPUT
+#   ahftc_summary_nature
+#
+# OUTPUTS
+#   model_any_device
+#   model_multiple_device
+#   table_multivariable_device_coi
+############################################################
+
+library(data.table)
+library(broom)
+
+setDT(ahftc_summary_nature)
+
+
+############################################################
+# 1. Prepare analytic dataset
+############################################################
+
+median_years <- median(
+  ahftc_summary_nature$years_since_npi,
+  na.rm=TRUE
+)
+
+# Exclude physicians with region coded as Other
+dt <- ahftc_summary_nature[
+  region!="Other" & !is.na(region)
+]
+
+# Career stage
+dt[,career_stage:=fcase(
+  years_since_npi<median_years,"Early–Mid Career",
+  years_since_npi>=median_years,"Mid–Late Career",
+  default=NA_character_
+)]
+
+# Dual specialty status
+dt[,dual_specialty_group:=fcase(
+  dual_specialty==0,"AHFTC Only",
+  dual_specialty==1,"Dual Specialty (AHFTC + Other)",
+  default=NA_character_
+)]
+
+# Set reference categories
+dt[,gender:=factor(gender,levels=c("F","M"))]
+dt[,region:=factor(region,levels=c("Midwest","Northeast","South","West"))]
+dt[,career_stage:=factor(
+  career_stage,
+  levels=c("Early–Mid Career","Mid–Late Career")
+)]
+dt[,dual_specialty_group:=factor(
+  dual_specialty_group,
+  levels=c("AHFTC Only","Dual Specialty (AHFTC + Other)")
+)]
+dt[,academic_status:=factor(academic_status,levels=c("No","Yes"))]
+dt[,guideline_author:=factor(guideline_author,levels=c("No","Yes"))]
+
+model_vars <- c(
+  "sig_device_coi_ever_new",
+  "multiple_device_company_coi",
+  "gender","region","career_stage",
+  "dual_specialty_group",
+  "academic_status","guideline_author"
+)
+
+dt_model <- dt[
+  complete.cases(dt[,..model_vars])
+]
+
+cat("Full cohort N =",nrow(ahftc_summary_nature),"\n")
+cat("Regression analytic N =",nrow(dt_model),"\n")
+cat("Career-stage median =",median_years,"years since NPI\n")
+
+
+############################################################
+# 2. Fit adjusted logistic regression models
+############################################################
+
+model_any_device <- glm(
+  sig_device_coi_ever_new ~
+    gender+region+career_stage+
+    dual_specialty_group+academic_status+guideline_author,
+  data=dt_model,
+  family=binomial
+)
+
+model_multiple_device <- glm(
+  multiple_device_company_coi ~
+    gender+region+career_stage+
+    dual_specialty_group+academic_status+guideline_author,
+  data=dt_model,
+  family=binomial
+)
+
+
+############################################################
+# 3. Extract adjusted odds ratios
+############################################################
+
+format_p <- function(p) {
+  if (is.na(p)) ""
+  else if (p<0.001) "<0.001"
+  else sprintf("%.3f",p)
+}
+
+extract_or <- function(model,outcome_label) {
+  
+  out <- as.data.table(
+    tidy(model,conf.int=TRUE,exp=TRUE)
+  )[term!="(Intercept)"]
+  
+  out[,`:=`(
+    Outcome=outcome_label,
+    `Adjusted OR`=sprintf("%.2f",estimate),
+    `95% CI`=paste0(
+      sprintf("%.2f",conf.low),
+      "–",
+      sprintf("%.2f",conf.high)
+    ),
+    `P value`=vapply(p.value,format_p,character(1))
+  )]
+  
+  out[,.(Outcome,term,`Adjusted OR`,`95% CI`,`P value`)]
+}
+
+table_multivariable_device_coi <- rbindlist(list(
+  extract_or(
+    model_any_device,
+    "Any Device COI"
+  ),
+  extract_or(
+    model_multiple_device,
+    "Multiple-Company Device COI"
+  )
+))
+
+
+############################################################
+# 4. Convert model terms to readable labels
+############################################################
+
+parse_term <- function(term_vec) {
+  
+  prefixes <- c(
+    "gender","region","career_stage",
+    "dual_specialty_group",
+    "academic_status","guideline_author"
+  )
+  
+  variable <- level <- rep(
+    NA_character_,
+    length(term_vec)
+  )
+  
+  for (prefix in prefixes) {
+    hit <- startsWith(term_vec,prefix)
+    variable[hit] <- prefix
+    level[hit] <- sub(
+      prefix,"",term_vec[hit],fixed=TRUE
+    )
+  }
+  
+  variable_labels <- c(
+    gender="Gender",
+    region="Region",
+    career_stage="Career Stage",
+    dual_specialty_group="Dual Specialty Status",
+    academic_status="Academic Status",
+    guideline_author="Guideline Authorship"
+  )
+  
+  variable <- unname(variable_labels[variable])
+  
+  level <- fifelse(
+    variable=="Gender" & level=="M",
+    "Male vs Female",
+    level
+  )
+  
+  level <- fifelse(
+    variable=="Region",
+    paste0(level," vs Midwest"),
+    level
+  )
+  
+  level <- fifelse(
+    variable=="Career Stage" &
+      level=="Mid–Late Career",
+    "Mid–Late Career vs Early–Mid Career",
+    level
+  )
+  
+  level <- fifelse(
+    variable=="Dual Specialty Status" &
+      level=="Dual Specialty (AHFTC + Other)",
+    "Dual Specialty (AHFTC + Other) vs AHFTC Only",
+    level
+  )
+  
+  level <- fifelse(
+    variable=="Academic Status" & level=="Yes",
+    "Academic vs Nonacademic",
+    level
+  )
+  
+  level <- fifelse(
+    variable=="Guideline Authorship" & level=="Yes",
+    "Guideline Author vs Not Guideline Author",
+    level
+  )
+  
+  data.table(
+    Variable=variable,
+    Level=level
+  )
+}
+
+parsed <- parse_term(
+  table_multivariable_device_coi$term
+)
+
+table_multivariable_device_coi[,`:=`(
+  Variable=parsed$Variable,
+  Level=parsed$Level
+)]
+
+table_multivariable_device_coi[,term:=NULL]
+
+
+############################################################
+# 5. Order results
+############################################################
+
+table_multivariable_device_coi[,Outcome:=factor(
+  Outcome,
+  levels=c(
+    "Any Device COI",
+    "Multiple-Company Device COI"
+  )
+)]
+
+table_multivariable_device_coi[,Variable:=factor(
+  Variable,
+  levels=c(
+    "Gender",
+    "Region",
+    "Career Stage",
+    "Dual Specialty Status",
+    "Academic Status",
+    "Guideline Authorship"
+  )
+)]
+
+setorder(
+  table_multivariable_device_coi,
+  Outcome,
+  Variable,
+  Level
+)
+
+table_multivariable_device_coi[,`:=`(
+  Outcome=as.character(Outcome),
+  Variable=as.character(Variable)
+)]
+
+
+############################################################
+# 6. Review results
+############################################################
+
+table_multivariable_device_coi
+
+summary(model_any_device)
+summary(model_multiple_device)
