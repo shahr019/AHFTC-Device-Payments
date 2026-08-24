@@ -1,6 +1,6 @@
-# Industry and Device-Related Payments to Advanced Heart Failure and Transplant Cardiology Specialists, 2018--2024
+# Industry and Device-Related Payments to Advanced Heart Failure and Transplant Cardiology Specialists, 2018 to 2024
 
-These files, in combination with freely and publicly available Open Payments and National Plan and Provider Enumeration System (NPPES) data, can be used to recreate the analyses presented in our study of industry and device-related payments to advanced heart failure and transplant cardiology (AHFTC) specialists in the United States from 2018--2024.
+These files, in combination with freely and publicly available Open Payments and National Plan and Provider Enumeration System (NPPES) data, can be used to recreate the analyses presented in our study of industry and device-related payments to advanced heart failure and transplant cardiology (AHFTC) specialists in the United States between 2018 and 2024
 
 ## A Brief Overview of the Files & Their Structure
 
@@ -71,7 +71,7 @@ manufacturer-level, and device-level analytic datasets.
 Recreating the datasets from the beginning requires the following
 publicly available CMS data:
 
-1.  **Open Payments General Payments Data (2018--2024)**\
+1.  **Open Payments General Payments Data (2018-2024)**\
     Annual general payment files are available from the CMS Open
     Payments Program:\
     https://openpaymentsdata.cms.gov/datasets
