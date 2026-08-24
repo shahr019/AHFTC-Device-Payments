@@ -33,7 +33,7 @@ There are two options for reproducing the study:
 
 Users wishing to reproduce the complete data-processing workflow can
 download the publicly available source data described below and run the
-Data Construction Scripts in sequence. These scripts generate the final
+Data Extraction Scripts in sequence. These scripts generate the final
 analytic datasets used in the study, with two exceptions:
 
 i) manual review of final NPI list, including (a) the addition of a small number 
